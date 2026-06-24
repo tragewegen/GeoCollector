@@ -58,13 +58,13 @@
         <button class="btn btn-cancel" onclick="annuleerMeting()">Annuleren</button>
     </div>
 
-    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script src="https://accounts.google.com/gsi/client?onload=initGoogleDriveApp" async defer></script>
     
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     
     <script>
         // ================================================================
-        // ⚙️ JOUW GOOGLE CONFIGURATIE (Vul dit in met jouw Google Cloud data)
+        // ⚙️ JOUW GOOGLE CONFIGURATIE (Behouden uit jouw script)
         // ================================================================
         const CLIENT_ID = '52672777831-qau94jqlth9vf54ttd0qotiok9ktonoo.apps.googleusercontent.com';
         const API_KEY = 'AIzaSyByHiUbB1K6yX8RXC4THaJbNregLfFDY34';
@@ -87,8 +87,9 @@
         // PWA Service Worker activeren
         if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js'); }
 
-        // Google OAuth Initialisatie bij het laden van de pagina
-        window.onload = function() {
+        // OPGELOST: Deze functie start nu pas op zodra het Google-script ECHT geladen is
+        function initGoogleDriveApp() {
+            console.log("Google SDK succesvol ingeladen.");
             tokenClient = google.accounts.oauth2.initTokenClient({
                 client_id: CLIENT_ID,
                 scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/spreadsheets',
@@ -101,9 +102,10 @@
                 },
             });
             if(accessToken) { document.getElementById('auth-btn').innerText = "✅ Google Ingelogd"; }
-        };
+        }
 
         function startGoogleAuth() {
+            if (!tokenClient) return alert("Google koppeling is nog aan het laden. Wacht een paar seconden.");
             tokenClient.requestAccessToken({prompt: 'consent'});
         }
 
@@ -154,7 +156,7 @@
                 if (tijdelijkeMarker) map.removeLayer(tijdelijkeMarker);
                 tijdelijkeMarker = L.marker([huidigeLocatie.lat, huidigeLocatie.lng]).addTo(map);
                 document.getElementById('form-container').style.display = 'block';
-            }, () => alert("Kan GPS-locatie niet bepalen."), { enableHighAccuracy: true });
+            }, () => alert("Kan GPS-locatie niet bepalen. Zet je GPS aan."), { enableHighAccuracy: true });
         }
 
         document.getElementById('photo-input').addEventListener('change', function(e) {
@@ -176,14 +178,13 @@
 
             if (!huidigeLocatie) return;
 
-            // Zachte enters (\n) converteren naar HTML enters (<br>) voor de pop-up kaart
             const geformatteerdCommentaar = commentaar.replace(/\n/g, '<br>');
 
             const nieuweMeting = {
                 lat: huidigeLocatie.lat,
                 lng: huidigeLocatie.lng,
                 commentaar: geformatteerdCommentaar,
-                originalCommentaar: commentaar, // Behouden voor het Google Excel bestand
+                originalCommentaar: commentaar, 
                 fotos: files, 
                 status: 'wachtend', 
                 tijdstip: new Date().toISOString()
@@ -215,5 +216,111 @@
             marker.bindPopup(popupContent);
         }
 
+        // HERSTELD: Functie maakt nu netjes de lus af
         function laadBestaandeMarkers() {
-            const transaction = db.
+            const transaction = db.transaction(["metingen"], "readonly");
+            const store = transaction.objectStore("metingen");
+            store.openCursor().onsuccess = function(e) {
+                let cursor = e.target.result;
+                if (cursor) { tekenMarkerOpKaart(cursor.value); cursor.continue(); }
+            };
+        }
+
+        // --- 5. GOOGLE DRIVE MAP & GOOGLE SHEETS API CALLS ---
+        async function uploadFotoNaarGoogleDrive(file) {
+            const metadata = { name: file.name, parents: [GOOGLE_FOLDER_ID] };
+            const formData = new FormData();
+            formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+            formData.append('file', file);
+
+            const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+                method: 'POST',
+                headers: new Headers({ 'Authorization': 'Bearer ' + accessToken }),
+                body: formData
+            });
+            if (!response.ok) {
+                if(response.status === 401) { startGoogleAuth(); } 
+                throw new Error('Drive upload mislukt (Status: ' + response.status + ')');
+            }
+            const resData = await response.json();
+            return `https://drive.google.com/open?id=${resData.id}`;
+        }
+
+        async function schrijfNaarGoogleSheet(lat, lng, commentaar, fotoUrls) {
+            const rijen = [[new Date().toLocaleString(), lat, lng, commentaar, fotoUrls.join(', ')]];
+            
+            // LET OP: Mocht je Excel-tabblad in het Engels staan, verander "Blad1" hieronder dan naar "Sheet1"
+            const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${GOOGLE_SHEET_ID}/values/Blad1!A:E:append?valueInputOption=USER_ENTERED&key=${API_KEY}`, {
+                method: 'POST',
+                headers: new Headers({ 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' }),
+                body: JSON.stringify({ values: rijen })
+            });
+            if (!response.ok) throw new Error('Sheet upload mislukt (Status: ' + response.status + ')');
+        }
+
+        // --- 6. AUTOMATISCHE SYNCHRONISATIE LOGICA ---
+        async function probeerSynchronisatie() {
+            if (!navigator.onLine || !db || !accessToken) return;
+
+            const wifiOnly = localStorage.getItem('wifiOnly') === 'true';
+            const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+
+            if (wifiOnly && conn && conn.type && conn.type !== 'wifi') { return; }
+
+            const wachtendeMetingen = [];
+            const transaction = db.transaction(["metingen"], "readonly");
+            const store = transaction.objectStore("metingen");
+            
+            store.openCursor().onsuccess = function(e) {
+                let cursor = e.target.result;
+                if (cursor) {
+                    if (cursor.value.status === 'wachtend') {
+                        wachtendeMetingen.push(cursor.value);
+                    }
+                    cursor.continue();
+                }
+            };
+
+            transaction.oncomplete = async function() {
+                if (wachtendeMetingen.length === 0) return;
+                
+                document.getElementById('status-msg').style.display = 'block';
+                
+                for (let meting of wachtendeMetingen) {
+                    try {
+                        let geuploadeUrls = [];
+                        for (let foto of meting.fotos) {
+                            let url = await uploadFotoNaarGoogleDrive(foto);
+                            geuploadeUrls.push(url);
+                        }
+                        
+                        await schrijfNaarGoogleSheet(meting.lat, meting.lng, meting.originalCommentaar, geuploadeUrls);
+                        
+                        const updateTransaction = db.transaction(["metingen"], "readwrite");
+                        const updateStore = updateTransaction.objectStore("metingen");
+                        
+                        meting.status = 'gesynchroniseerd';
+                        meting.fotos = geuploadeUrls; 
+                        updateStore.put(meting); 
+                        
+                        console.log("Punt succesvol gesynchroniseerd met Google!");
+                    } catch (error) {
+                        console.error("Synchronisatie fout:", error);
+                        alert("Sync fout:\n" + error.message + "\n\nControleer of de tabbladnaam 'Blad1' klopt.");
+                    }
+                }
+                
+                document.getElementById('status-msg').style.display = 'none';
+            };
+        }
+
+        function annuleerMeting() {
+            if (tijdelijkeMarker) map.removeLayer(tijdelijkeMarker);
+            document.getElementById('comment').value = '';
+            document.getElementById('photo-input').value = '';
+            document.getElementById('photo-preview').innerHTML = '';
+            document.getElementById('form-container').style.display = 'none';
+        }
+    </script>
+</body>
+</html>
