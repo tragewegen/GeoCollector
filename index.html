@@ -66,10 +66,10 @@
         // ================================================================
         // ⚙️ JOUW GOOGLE CONFIGURATIE (Vul dit in met jouw Google Cloud data)
         // ================================================================
-        const CLIENT_ID = '52672777831-qau94jqlth9vf54ttd0qotiok9ktonoo.apps.googleusercontent.com';
-        const API_KEY = 'AIzaSyByHiUbB1K6yX8RXC4THaJbNregLfFDY34';
-        const GOOGLE_FOLDER_ID = '1rsl1bBDCRZWJ4M9-8V1dnrGPUwXkO36s'; 
-        const GOOGLE_SHEET_ID = '1bYS3FpRMrTRHLE5yOIIWSZqyw1b30Zt2m6AkI0Ytddo';
+        const CLIENT_ID = 'JOUW_OAUTH_CLIENT_ID.apps.googleusercontent.com';
+        const API_KEY = 'JOUW_GOOGLE_API_KEY';
+        const GOOGLE_FOLDER_ID = 'JOUW_DRIVE_FOLDER_ID'; 
+        const GOOGLE_SHEET_ID = 'JOUW_SPREADSHEET_ID';
         // ================================================================
 
         let tokenClient;
@@ -190,7 +190,7 @@
             };
 
             const transaction = db.transaction(["metingen"], "readwrite");
-            const store = transaction.objectStore(["metingen"]);
+            const store = transaction.objectStore("metingen");
             store.add(nieuweMeting);
 
             transaction.oncomplete = function() {
@@ -216,97 +216,4 @@
         }
 
         function laadBestaandeMarkers() {
-            const transaction = db.transaction(["metingen"], "readonly");
-            const store = transaction.objectStore("metingen");
-            store.openCursor().onsuccess = function(e) {
-                let cursor = e.target.result;
-                if (cursor) { tekenMarkerOpKaart(cursor.value); cursor.continue(); }
-            };
-        }
-
-        // --- 5. GOOGLE DRIVE MAP & GOOGLE SHEETS API CALLS ---
-        async function uploadFotoNaarGoogleDrive(file) {
-            const metadata = { name: file.name, parents: [GOOGLE_FOLDER_ID] };
-            const formData = new FormData();
-            formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-            formData.append('file', file);
-
-            const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-                method: 'POST',
-                headers: new Headers({ 'Authorization': 'Bearer ' + accessToken }),
-                body: formData
-            });
-            if (!response.ok) {
-                if(response.status === 401) { startGoogleAuth(); } 
-                throw new Error('Drive upload mislukt');
-            }
-            const resData = await response.json();
-            return `https://drive.google.com/open?id=${resData.id}`;
-        }
-
-        async function schrijfNaarGoogleSheet(lat, lng, commentaar, fotoUrls) {
-            const rijen = [[new Date().toLocaleString(), lat, lng, commentaar, fotoUrls.join(', ')]];
-            const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${GOOGLE_SHEET_ID}/values/Blad1!A:E:append?valueInputOption=USER_ENTERED&key=${API_KEY}`, {
-                method: 'POST',
-                headers: new Headers({ 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' }),
-                body: JSON.stringify({ values: rijen })
-            });
-            if (!response.ok) throw new Error('Sheet upload mislukt');
-        }
-
-        // --- 6. INTERNET & WIFI CONTROLEREN EN SYNCHRONISEREN ---
-        async function probeerSynchronisatie() {
-            if (!navigator.onLine || !db || !accessToken) return;
-
-            const wifiOnly = localStorage.getItem('wifiOnly') === 'true';
-            const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-
-            // Als 'Alleen via wifi' aan staat, en we zitten op mobiel data netwerk -> breek sync af
-            if (wifiOnly && conn && conn.type && conn.type !== 'wifi') { return; }
-
-            const transaction = db.transaction(["metingen"], "readwrite");
-            const store = transaction.objectStore("metingen");
-            
-            store.openCursor().onsuccess = async function(e) {
-                let cursor = e.target.result;
-                if (cursor) {
-                    let meting = cursor.value;
-                    if (meting.status === 'wachtend') {
-                        document.getElementById('status-msg').style.display = 'block';
-                        
-                        try {
-                            let geuploadeUrls = [];
-                            for (let foto of meting.fotos) {
-                                let url = await uploadFotoNaarGoogleDrive(foto);
-                                geuploadeUrls.push(url);
-                            }
-                            
-                            // Gebruik de 'originalCommentaar' zodat enters in Excel als gewone regeleinden binnenkomen
-                            await schrijfNaarGoogleSheet(meting.lat, meting.lng, meting.originalCommentaar, geuploadeUrls);
-                            
-                            meting.status = 'gesynchroniseerd';
-                            meting.fotos = geuploadeUrls; 
-                            cursor.update(meting);
-                            
-                            console.log("Succesvol gesynchroniseerd met Google Drive & Sheets!");
-                        } catch (error) {
-                            console.error("Synchronisatie fout:", error);
-                        }
-                    }
-                    cursor.continue();
-                } else {
-                    document.getElementById('status-msg').style.display = 'none';
-                }
-            };
-        }
-
-        function annuleerMeting() {
-            if (tijdelijkeMarker) map.removeLayer(tijdelijkeMarker);
-            document.getElementById('comment').value = '';
-            document.getElementById('photo-input').value = '';
-            document.getElementById('photo-preview').innerHTML = '';
-            document.getElementById('form-container').style.display = 'none';
-        }
-    </script>
-</body>
-</html>
+            const transaction = db.
