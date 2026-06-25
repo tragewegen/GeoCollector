@@ -1,4 +1,4 @@
-const CACHE_NAME = 'drive-collector-v3'; // Versie verhoogd
+const CACHE_NAME = 'drive-collector-v4'; // Cacheversie verhoogd voor update-registratie
 const ASSETS = [
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'

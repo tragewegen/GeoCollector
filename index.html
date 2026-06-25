@@ -37,8 +37,8 @@
             <input type="checkbox" id="wifi-only-toggle" onchange="toggleWifiSetting(this.checked)">
             <label for="wifi-only-toggle">Foto's alleen via Wifi</label>
         </div>
-        <button id="auth-btn" onclick="startGoogleAuth()" style="background:#4285F4; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">🔑 Log in met Google</button>
-        <div id="network-status">Status: Online</div>
+        <button id="auth-btn" onclick="startGoogleAuth()">🔑 Log in met Google</button>
+        <div id="network-status">Status: Controleren...</div>
     </div>
     <div id="status-msg">Wachtrij aan het synchroniseren met Google Drive...</div>
 
@@ -48,7 +48,7 @@
     <div id="form-container">
         <h3>Nieuw punt registreren</h3>
         <label for="comment">Commentaar:</label>
-        <textarea id="comment" rows="3" placeholder="Typ hier je opmerkingen... (Shift+Enter voor nieuwe regel)"></textarea>
+        <textarea id="comment" rows="3" placeholder="Typ hier je opmerkingen..."></textarea>
         
         <label style="display:block; margin-top:15px; font-weight:bold;">Foto('s) toevoegen:</label>
         <input type="file" id="photo-input" accept="image/*" capture="environment" multiple style="margin-top:5px;">
@@ -61,7 +61,6 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     
     <script>
-        // --- 0. DIGITALE VERKLIKKER (Vangt opstartfouten direct op) ---
         window.onerror = function(message, source, lineno, colno, error) {
             alert("⚠️ Fatale opstartfout gedetecteerd:\n\n" + message + "\n\nRegel: " + lineno + "\nBron: " + source);
             return false;
@@ -82,8 +81,8 @@
         let huidigeLocatie = null;
         let tijdelijkeMarker = null;
         let db = null;
+        let isSyncing = false;
 
-        // Start de kaart pas op als we zeker weten dat de HTML geladen is
         try {
             map = L.map('map').setView([50.8503, 4.3517], 13);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -94,10 +93,8 @@
             alert("Fout bij laden van de kaart: " + err.message);
         }
 
-        // PWA Service Worker activeren
         if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js'); }
 
-        // Wordt aangeroepen zodra het Google Script onderaan geladen is
         function initGoogleDriveApp() {
             try {
                 console.log("Google SDK geladen. Initialiseren van client...");
@@ -152,11 +149,12 @@
         };
 
         // --- 2. NETWERK & WIFI DETECTIE ---
-        const wifiOnlySetting = localStorage.getItem('wifiOnly') === 'true';
+        let wifiOnlySetting = localStorage.getItem('wifiOnly') === 'true';
         document.getElementById('wifi-only-toggle').checked = wifiOnlySetting;
 
         function toggleWifiSetting(checked) {
             localStorage.setItem('wifiOnly', checked);
+            wifiOnlySetting = checked;
             probeerSynchronisatie();
         }
 
@@ -200,6 +198,15 @@
             });
         });
 
+        function annuleerMeting() {
+            if (tijdelijkeMarker && map) { map.removeLayer(tijdelijkeMarker); }
+            document.getElementById('form-container').style.display = 'none';
+            document.getElementById('comment').value = '';
+            document.getElementById('photo-input').value = '';
+            document.getElementById('photo-preview').innerHTML = '';
+            huidigeLocatie = null;
+        }
+
         // --- 4. VERWERK & LOKAAL METING OPSLAAN ---
         function verwerkOpslag() {
             const commentaar = document.getElementById('comment').value;
@@ -209,10 +216,187 @@
             if (!huidigeLocatie) return alert("Geen locatie bekend. Start eerst de meting.");
 
             const geformatteerdCommentaar = commentaar.replace(/\n/g, '<br>');
+            
+            // Converteer foto's naar base64 objecten voor betrouwbare opslag in IndexedDB
+            const fotoPromises = files.map(file => {
+                return new Promise((resolve) => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => resolve({ name: file.name, type: file.type, dataUrl: e.target.result });
+                    reader.readAsDataURL(file);
+                });
+            });
 
-            const nieuweMeting = {
-                lat: huidigeLocatie.lat,
-                lng: huidigeLocatie.lng,
-                commentaar: geformatteerdCommentaar,
-                originalCommentaar: commentaar, 
-                fotos: files,
+            Promise.all(fotoPromises).then(geconverteerdeFotos => {
+                const nieuweMeting = {
+                    lat: huidigeLocatie.lat,
+                    lng: huidigeLocatie.lng,
+                    commentaar: geformatteerdCommentaar,
+                    originalCommentaar: commentaar,
+                    fotos: geconverteerdeFotos,
+                    timestamp: new Date().toISOString(),
+                    enviado: false
+                };
+
+                const tx = db.transaction("metingen", "readwrite");
+                const store = tx.objectStore("metingen");
+                const request = store.add(nieuweMeting);
+
+                request.onsuccess = function(e) {
+                    nieuweMeting.id = e.target.result;
+                    voegMarkerToeAanKaart(nieuweMeting);
+                    annuleerMeting();
+                    probeerSynchronisatie();
+                };
+            });
+        }
+
+        function voegMarkerToeAanKaart(meting) {
+            if (!map) return;
+            let popupContent = `<b>Meting #${meting.id}</b><br>${meting.commentaar}<br><small>${new Date(meting.timestamp).toLocaleString()}</small>`;
+            if (meting.fotos && meting.fotos.length > 0) {
+                popupContent += '<br><div style="display:flex; gap:4px; margin-top:5px;">';
+                meting.fotos.forEach(f => {
+                    popupContent += `<img src="${f.dataUrl}" class="preview-img" style="width:50px; height:50px;">`;
+                });
+                popupContent += '</div>';
+            }
+            L.marker([meting.lat, meting.lng]).addTo(map).bindPopup(popupContent);
+        }
+
+        function laadBestaandeMarkers() {
+            if (!db) return;
+            const tx = db.transaction("metingen", "readonly");
+            const store = tx.objectStore("metingen");
+            store.openCursor().onsuccess = function(e) {
+                const cursor = e.target.result;
+                if (cursor) {
+                    voegMarkerToeAanKaart(cursor.value);
+                    cursor.continue();
+                }
+            };
+        }
+
+        // --- 5. BACKGROUND GOOGLE SYNCHRONISATIE LOOP ---
+        async function probeerSynchronisatie() {
+            if (isSyncing || !navigator.onLine || !accessToken || !db) return;
+            
+            // Controleer netwerkkwaliteit/type indien browser dat ondersteunt
+            const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+            const isMobiel = conn && (conn.type === 'cellular' || ['2g', '3g', '4g'].includes(conn.effectiveType));
+
+            const tx = db.transaction("metingen", "readwrite");
+            const store = tx.objectStore("metingen");
+            
+            store.openCursor().onsuccess = async function(e) {
+                const cursor = e.target.result;
+                if (!cursor) {
+                    document.getElementById('status-msg').style.display = 'none';
+                    isSyncing = false;
+                    return;
+                }
+
+                const meting = cursor.value;
+                if (meting.enviado) {
+                    cursor.continue();
+                    return;
+                }
+
+                isSyncing = true;
+                document.getElementById('status-msg').style.display = 'block';
+
+                try {
+                    let fotoLinks = [];
+                    
+                    // Sla foto-upload over als de gebruiker Wifi-only eist en we mobiel zijn
+                    const blokkeerFotosAchterNetwerk = wifiOnlySetting && isMobiel;
+
+                    if (meting.fotos && meting.fotos.length > 0 && !blokkeerFotosAchterNetwerk) {
+                        for (const foto of meting.fotos) {
+                            const link = await uploadFotoNaarDrive(foto);
+                            fotoLinks.push(link);
+                        }
+                    } else if (meting.fotos && meting.fotos.length > 0 && blokkeerFotosAchterNetwerk) {
+                        fotoLinks.push("[Foto geparkeerd: wacht op Wifi]");
+                    }
+
+                    // Voeg data toe aan Google Sheets
+                    await voegToeAanGoogleSheet(meting, fotoLinks.join(', '));
+
+                    // Update status in de lokale database
+                    meting.enviado = true;
+                    cursor.update(meting);
+                    console.log(`Meting ${meting.id} succesvol gesynchroniseerd.`);
+                    
+                    // Ga direct door naar de volgende meting in de wachtrij
+                    cursor.continue();
+                } catch (err) {
+                    console.error("Synchronisatie mislukt voor meting: ", err);
+                    isSyncing = false;
+                    document.getElementById('status-msg').style.display = 'none';
+                }
+            };
+        }
+
+        async function uploadFotoNaarDrive(fotoData) {
+            const base64Content = fotoData.dataUrl.split(',')[1];
+            const byteCharacters = atob(base64Content);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const blob = new Blob([byteArray], { type: fotoData.type });
+
+            const metadata = {
+                name: `Geo_${Date.now()}_${fotoData.name}`,
+                parents: [GOOGLE_FOLDER_ID]
+            };
+
+            const form = new FormData();
+            form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+            form.append('file', blob);
+
+            const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${accessToken}` },
+                body: form
+            });
+
+            if (!res.ok) {
+                if(res.status === 401) { updateAuthButton(false); localStorage.removeItem('google_access_token'); }
+                throw new Error("Drive HTTP fout: " + res.status);
+            }
+            const driveResult = await res.json();
+            return driveResult.webViewLink;
+        }
+
+        async function voegToeAanGoogleSheet(meting, gecombineerdeLinks) {
+            const rows = [
+                meting.id,
+                meting.lat,
+                meting.lng,
+                meting.originalCommentaar,
+                meting.timestamp,
+                gecombineerdeLinks
+            ];
+
+            const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${GOOGLE_SHEET_ID}/values/A1:append?valueInputOption=USER_ENTERED`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ values: [rows] })
+            });
+
+            if (!res.ok) {
+                if(res.status === 401) { updateAuthButton(false); localStorage.removeItem('google_access_token'); }
+                throw new Error("Sheets HTTP fout: " + res.status);
+            }
+            return await res.json();
+        }
+    </script>
+
+    <script src="https://accounts.google.com/gsi/client" onload="initGoogleDriveApp()" async defer></script>
+</body>
+</html>
