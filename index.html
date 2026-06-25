@@ -32,6 +32,27 @@
         .btn-danger { background: #c0392b; padding: 8px 12px; font-size: 14px; width: auto; margin-top: 0; }
         .btn-menu-toggle { background: #7f8c8d; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; }
         
+        /* UPGRADE: Custom fotoknop styling */
+        .btn-camera { 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            gap: 10px; 
+            background: #34495e; 
+            color: white; 
+            padding: 12px; 
+            font-size: 16px; 
+            border-radius: 5px; 
+            cursor: pointer; 
+            width: 100%; 
+            box-sizing: border-box;
+            margin-top: 8px; 
+            font-weight: bold; 
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .btn-camera:active { background: #2c3e50; }
+        
         /* Grote meetknop rechtsonder */
         #geo-btn { position: absolute; bottom: 30px; right: 20px; z-index: 1000; background: #2ecc71; color: white; border: none; border-radius: 50%; width: 60px; height: 60px; font-size: 24px; cursor: pointer; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
         textarea { width: 100%; box-sizing: border-box; margin-top: 5px; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 16px; }
@@ -74,8 +95,11 @@
         <textarea id="comment" rows="3" placeholder="Typ hier je opmerkingen..."></textarea>
         
         <label style="display:block; margin-top:15px; font-weight:bold;">Foto('s) toevoegen:</label>
-        <input type="file" id="photo-input" accept="image/*" capture="environment" multiple style="margin-top:5px;">
-        <div id="photo-preview"></div>
+        
+        <label for="photo-input" class="btn-camera">📸 Neem foto</label>
+        <input type="file" id="photo-input" accept="image/*" capture="environment" multiple style="display: none;">
+        
+        <div id="photo-preview" style="margin-top: 8px;"></div>
 
         <button class="btn btn-main" onclick="verwerkOpslag()">Opslaan (Lokaal/Wachtrij)</button>
         <button class="btn btn-cancel" onclick="annuleerMeting()">Annuleren</button>
@@ -146,13 +170,11 @@
             console.error("Fout bij kaart laden: " + err.message);
         }
 
-        // --- UPGRADE: LIVE GPS INDICATOR NU IN HET BLAUW ---
         function updateGpsIndicator(lat, lng, accuracy) {
             if (!map) return;
             if (gpsMarker) map.removeLayer(gpsMarker);
             if (nauwkeurigheidCirkel) map.removeLayer(nauwkeurigheidCirkel);
 
-            // Blauwe nauwkeurigheidscirkel (#3498db)
             nauwkeurigheidCirkel = L.circle([lat, lng], {
                 radius: accuracy,
                 color: '#3498db',
@@ -162,7 +184,6 @@
                 dashArray: '4, 4'
             }).addTo(map);
 
-            // Blauwe crosshair SVG (#3498db)
             const crosshairHtml = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#3498db" stroke-width="2"><circle cx="12" cy="12" r="3" fill="#3498db"/><line x1="12" y1="2" x2="12" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg>';
             const gpsIcon = L.divIcon({
                 className: 'gps-crosshair-icon',
@@ -333,6 +354,7 @@
             });
         });
 
+        // --- 4. LOCALE METING-OPSLAG ---
         function annuleerMeting() {
             if (tijdelijkeMarker && map) { map.removeLayer(tijdelijkeMarker); }
             document.getElementById('form-container').style.display = 'none';
@@ -342,7 +364,6 @@
             huidigeLocatie = null;
         }
 
-        // --- 4. LOCALE METING-OPSLAG ---
         function verwerkOpslag() {
             const commentaar = document.getElementById('comment').value;
             const fotoInput = document.getElementById('photo-input');
@@ -545,50 +566,4 @@
             });
 
             if (!res.ok) {
-                if(res.status === 401) { 
-                    updateAuthButton(false); 
-                    localStorage.removeItem('google_access_token');
-                    accessToken = null;
-                    alert("🔒 Google sessie is verlopen. Klik bovenin opnieuw op '🔑 Log in'.");
-                }
-                throw new Error("Drive API Fout: " + res.status);
-            }
-            const driveResult = await res.json();
-            return driveResult.webViewLink;
-        }
-
-        async function voegToeAanGoogleSheet(meting, gecombineerdeLinks) {
-            const rows = [
-                meting.id,
-                String(meting.lat), 
-                String(meting.lng), 
-                meting.originalCommentaar,
-                meting.timestamp, 
-                gecombineerdeLinks
-            ];
-
-            const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${GOOGLE_SHEET_ID}/values/A1:append?valueInputOption=USER_ENTERED`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${accessToken}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ values: [rows] })
-            });
-
-            if (!res.ok) {
-                if(res.status === 401) { 
-                    updateAuthButton(false); 
-                    localStorage.removeItem('google_access_token');
-                    accessToken = null;
-                    alert("🔒 Google sessie is verlopen. Klik bovenin opnieuw op '🔑 Log in'.");
-                }
-                throw new Error("Sheets API Fout: " + res.status);
-            }
-            return;
-        }
-    </script>
-
-    <script src="https://accounts.google.com/gsi/client" onload="initGoogleDriveApp()" async defer></script>
-</body>
-</html>
+                if(res.status === 401
