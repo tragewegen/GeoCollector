@@ -38,7 +38,6 @@
         .preview-img { max-width: 70px; height: 70px; object-fit: cover; margin: 5px; border-radius: 4px; border: 1px solid #ddd; }
         #status-msg { background: #f1c40f; color: #2c3e50; text-align: center; padding: 5px; font-size: 12px; font-weight: bold; display: none; }
         
-        /* CSS crosshair fix voor Leaflet */
         .gps-crosshair-icon { background: transparent !important; border: none !important; }
     </style>
 </head>
@@ -108,11 +107,8 @@
         let map = null;
         let huidigeLocatie = null;
         let tijdelijkeMarker = null;
-        
-        // Nieuwe variabelen voor de live GPS indicators
         let gpsMarker = null;
         let nauwkeurigheidCirkel = null;
-        
         let db = null;
         let isSyncing = false;
 
@@ -137,17 +133,11 @@
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '© OpenStreetMap'
             }).addTo(map);
-            console.log("Kaart succesvol opgestart.");
             
-            // UPGRADE: Luisteraar voor handmatig tikken/klikken op de kaart
             map.on('click', function(e) {
                 huidigeLocatie = { lat: e.latlng.lat, lng: e.latlng.lng };
-                
-                // Plaats of verplaats de tijdelijke blauwe pinpoint naar de geklikte plek
                 if (tijdelijkeMarker) map.removeLayer(tijdelijkeMarker);
                 tijdelijkeMarker = L.marker([huidigeLocatie.lat, huidigeLocatie.lng]).addTo(map);
-                
-                // Open direct het invulformulier
                 document.getElementById('form-container').style.display = 'block';
             });
 
@@ -156,26 +146,24 @@
             console.error("Fout bij kaart laden: " + err.message);
         }
 
-        // --- UPGRADE: LIVE GPS & ACCURACY INDICATOR UPDATE ---
+        // --- UPGRADE: LIVE GPS INDICATOR NU IN HET BLAUW ---
         function updateGpsIndicator(lat, lng, accuracy) {
             if (!map) return;
-
-            // Verwijder oude crosshair en cirkel
             if (gpsMarker) map.removeLayer(gpsMarker);
             if (nauwkeurigheidCirkel) map.removeLayer(nauwkeurigheidCirkel);
 
-            // Teken de nauwkeurigheidscirkel (lichtgroen)
+            // Blauwe nauwkeurigheidscirkel (#3498db)
             nauwkeurigheidCirkel = L.circle([lat, lng], {
                 radius: accuracy,
-                color: '#2ecc71',
-                fillColor: '#2ecc71',
-                fillOpacity: 0.15,
+                color: '#3498db',
+                fillColor: '#3498db',
+                fillOpacity: 0.12,
                 weight: 1.5,
                 dashArray: '4, 4'
             }).addTo(map);
 
-            // Maak een scherpe crosshair met inline SVG
-            const crosshairHtml = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2ecc71" stroke-width="2"><circle cx="12" cy="12" r="3" fill="#2ecc71"/><line x1="12" y1="2" x2="12" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg>';
+            // Blauwe crosshair SVG (#3498db)
+            const crosshairHtml = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#3498db" stroke-width="2"><circle cx="12" cy="12" r="3" fill="#3498db"/><line x1="12" y1="2" x2="12" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg>';
             const gpsIcon = L.divIcon({
                 className: 'gps-crosshair-icon',
                 html: crosshairHtml,
@@ -183,14 +171,11 @@
                 iconAnchor: [12, 12]
             });
 
-            // Plaats de crosshair op de kaart
             gpsMarker = L.marker([lat, lng], { icon: gpsIcon }).addTo(map);
         }
 
-        // --- AUTOMATISCHE GPS-CHECK BIJ OPSTARTEN ---
         function autoLocatieOpstarten() {
             if (!navigator.geolocation) return;
-            
             navigator.geolocation.getCurrentPosition(position => {
                 const lat = position.coords.latitude;
                 const lng = position.coords.longitude;
@@ -202,7 +187,7 @@
                 
                 if (map) {
                     map.setView([lat, lng], 17);
-                    updateGpsIndicator(lat, lng, accuracy); // Teken crosshair + cirkel
+                    updateGpsIndicator(lat, lng, accuracy);
                 }
             }, (err) => {
                 alert("⚠️ Locatievoorzieningen (GPS) staan uit of zijn geblokkeerd. De app toont nu je laatst bekende locatie.");
@@ -328,7 +313,7 @@
 
                 if(map) {
                     map.setView([lat, lng], 17);
-                    updateGpsIndicator(lat, lng, accuracy); // Update crosshair + cirkel
+                    updateGpsIndicator(lat, lng, accuracy);
                     
                     if (tijdelijkeMarker) map.removeLayer(tijdelijkeMarker);
                     tijdelijkeMarker = L.marker([lat, lng]).addTo(map);
@@ -575,8 +560,8 @@
         async function voegToeAanGoogleSheet(meting, gecombineerdeLinks) {
             const rows = [
                 meting.id,
-                meting.lat,
-                meting.lng,
+                String(meting.lat), 
+                String(meting.lng), 
                 meting.originalCommentaar,
                 meting.timestamp, 
                 gecombineerdeLinks
