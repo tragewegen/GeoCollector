@@ -37,6 +37,9 @@
         textarea { width: 100%; box-sizing: border-box; margin-top: 5px; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 16px; }
         .preview-img { max-width: 70px; height: 70px; object-fit: cover; margin: 5px; border-radius: 4px; border: 1px solid #ddd; }
         #status-msg { background: #f1c40f; color: #2c3e50; text-align: center; padding: 5px; font-size: 12px; font-weight: bold; display: none; }
+        
+        /* CSS crosshair fix voor Leaflet */
+        .gps-crosshair-icon { background: transparent !important; border: none !important; }
     </style>
 </head>
 <body>
@@ -105,6 +108,11 @@
         let map = null;
         let huidigeLocatie = null;
         let tijdelijkeMarker = null;
+        
+        // Nieuwe variabelen voor de live GPS indicators
+        let gpsMarker = null;
+        let nauwkeurigheidCirkel = null;
+        
         let db = null;
         let isSyncing = false;
 
@@ -119,8 +127,8 @@
             return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
         }
 
-        // --- KAART INITIALISEREN (Met Geheugen-check) ---
-        const lastLat = parseFloat(localStorage.getItem('last_lat')) || 50.8503; // Brussel als nood-fallback
+        // --- KAART INITIALISEREN ---
+        const lastLat = parseFloat(localStorage.getItem('last_lat')) || 50.8503;
         const lastLng = parseFloat(localStorage.getItem('last_lng')) || 4.3517;
         const lastZoom = parseInt(localStorage.getItem('last_zoom')) || 13;
 
@@ -129,12 +137,54 @@
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '© OpenStreetMap'
             }).addTo(map);
-            console.log("Kaart succesvol opgestart op laatst bekende locatie.");
+            console.log("Kaart succesvol opgestart.");
             
-            // Start onmiddellijk de automatische GPS-locatiebepaling op de achtergrond
+            // UPGRADE: Luisteraar voor handmatig tikken/klikken op de kaart
+            map.on('click', function(e) {
+                huidigeLocatie = { lat: e.latlng.lat, lng: e.latlng.lng };
+                
+                // Plaats of verplaats de tijdelijke blauwe pinpoint naar de geklikte plek
+                if (tijdelijkeMarker) map.removeLayer(tijdelijkeMarker);
+                tijdelijkeMarker = L.marker([huidigeLocatie.lat, huidigeLocatie.lng]).addTo(map);
+                
+                // Open direct het invulformulier
+                document.getElementById('form-container').style.display = 'block';
+            });
+
             autoLocatieOpstarten();
         } catch(err) {
             console.error("Fout bij kaart laden: " + err.message);
+        }
+
+        // --- UPGRADE: LIVE GPS & ACCURACY INDICATOR UPDATE ---
+        function updateGpsIndicator(lat, lng, accuracy) {
+            if (!map) return;
+
+            // Verwijder oude crosshair en cirkel
+            if (gpsMarker) map.removeLayer(gpsMarker);
+            if (nauwkeurigheidCirkel) map.removeLayer(nauwkeurigheidCirkel);
+
+            // Teken de nauwkeurigheidscirkel (lichtgroen)
+            nauwkeurigheidCirkel = L.circle([lat, lng], {
+                radius: accuracy,
+                color: '#2ecc71',
+                fillColor: '#2ecc71',
+                fillOpacity: 0.15,
+                weight: 1.5,
+                dashArray: '4, 4'
+            }).addTo(map);
+
+            // Maak een scherpe crosshair met inline SVG
+            const crosshairHtml = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2ecc71" stroke-width="2"><circle cx="12" cy="12" r="3" fill="#2ecc71"/><line x1="12" y1="2" x2="12" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg>';
+            const gpsIcon = L.divIcon({
+                className: 'gps-crosshair-icon',
+                html: crosshairHtml,
+                iconSize: [24, 24],
+                iconAnchor: [12, 12]
+            });
+
+            // Plaats de crosshair op de kaart
+            gpsMarker = L.marker([lat, lng], { icon: gpsIcon }).addTo(map);
         }
 
         // --- AUTOMATISCHE GPS-CHECK BIJ OPSTARTEN ---
@@ -144,18 +194,17 @@
             navigator.geolocation.getCurrentPosition(position => {
                 const lat = position.coords.latitude;
                 const lng = position.coords.longitude;
+                const accuracy = position.coords.accuracy;
                 
-                // Onthoud deze locatie voor de volgende keer opstarten
                 localStorage.setItem('last_lat', lat);
                 localStorage.setItem('last_lng', lng);
                 localStorage.setItem('last_zoom', 17);
                 
-                // Verplaats de kaart live naar de huidige positie
                 if (map) {
                     map.setView([lat, lng], 17);
+                    updateGpsIndicator(lat, lng, accuracy); // Teken crosshair + cirkel
                 }
             }, (err) => {
-                // Als GPS uit staat of geweigerd is, geef een duidelijke melding
                 alert("⚠️ Locatievoorzieningen (GPS) staan uit of zijn geblokkeerd. De app toont nu je laatst bekende locatie.");
             }, { enableHighAccuracy: true, timeout: 8000 });
         }
@@ -263,21 +312,26 @@
         if(navigator.connection) { navigator.connection.addEventListener('change', controleerNetwerkStatus); }
         controleerNetwerkStatus();
 
-        // --- 3. GPS CHIP & MEDIA CAPTURE ---
+        // --- 3. GPS CHIP BUTTON ---
         function registreerLocatie() {
             if (!navigator.geolocation) return alert("Dit apparaat heeft of ondersteunt geen GPS.");
             navigator.geolocation.getCurrentPosition(position => {
-                huidigeLocatie = { lat: position.coords.latitude, lng: position.coords.longitude };
+                const lat = position.coords.latitude;
+                const lng = position.coords.longitude;
+                const accuracy = position.coords.accuracy;
                 
-                // Update ook hier direct de laatst bekende locatie in het geheugen
-                localStorage.setItem('last_lat', huidigeLocatie.lat);
-                localStorage.setItem('last_lng', huidigeLocatie.lng);
+                huidigeLocatie = { lat: lat, lng: lng };
+                
+                localStorage.setItem('last_lat', lat);
+                localStorage.setItem('last_lng', lng);
                 localStorage.setItem('last_zoom', 17);
 
                 if(map) {
-                    map.setView([huidigeLocatie.lat, huidigeLocatie.lng], 17);
+                    map.setView([lat, lng], 17);
+                    updateGpsIndicator(lat, lng, accuracy); // Update crosshair + cirkel
+                    
                     if (tijdelijkeMarker) map.removeLayer(tijdelijkeMarker);
-                    tijdelijkeMarker = L.marker([huidigeLocatie.lat, huidigeLocatie.lng]).addTo(map);
+                    tijdelijkeMarker = L.marker([lat, lng]).addTo(map);
                 }
                 document.getElementById('form-container').style.display = 'block';
             }, (err) => alert("GPS-signaal fout: " + err.message), { enableHighAccuracy: true });
@@ -309,7 +363,7 @@
             const fotoInput = document.getElementById('photo-input');
             const files = Array.from(fotoInput.files);
 
-            if (!huidigeLocatie) return alert("Geen actieve GPS coördinaten gevonden.");
+            if (!huidigeLocatie) return alert("Geen actieve GPS coördinaten gevonden. Tik op de kaart of gebruik de 📍 knop.");
 
             const geformatteerdCommentaar = commentaar.replace(/\n/g, '<br>');
             
@@ -418,10 +472,7 @@
                             fotoLinks.push("[Foto geparkeerd: wacht op Wifi]");
                         }
 
-                        // Schrijf data weg naar Google Sheets
                         await voegToeAanGoogleSheet(meting, fotoLinks.join(', '));
-                        
-                        // Update status vlag in database
                         await markeerAlsVerzonden(meting.id);
                         console.log(`Meting ${meting.id} succesvol verzonden.`);
                     } catch (err) {
