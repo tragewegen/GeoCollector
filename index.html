@@ -77,6 +77,9 @@
             <input type="checkbox" id="wifi-only-toggle" onchange="toggleWifiSetting(this.checked)">
             <label for="wifi-only-toggle"><b>Foto's alleen verzenden via Wifi</b> (bespaar mobiele data)</label>
         </div>
+        <div class="menu-item" style="margin-top: 5px;">
+            <button class="btn btn-main" onclick="manualForceSync()" style="margin-top: 0; padding: 10px; font-size: 14px; background: #3498db;">🚀 Forceer Synchronisatie Nu</button>
+        </div>
         <hr style="border: 0; border-top: 1px solid #4f6f8f; margin: 12px 0;">
         <div class="menu-item" style="justify-content: space-between;">
             <span><b>Lokale database opschonen:</b><br><small style="color: #bdc3c7;">Wist alle oude markers en herstart de app met een schone lei.</small></span>
@@ -135,6 +138,7 @@
         let nauwkeurigheidCirkel = null;
         let db = null;
         let isSyncing = false;
+        let forceSyncMode = false; // Controle-vlag voor handmatig forceren
 
         // --- LOKALE TIJD FORMATTEREN ---
         function formatteerDatumLokaal(date) {
@@ -158,7 +162,6 @@
                 attribution: '© OpenStreetMap'
             }).addTo(map);
             
-            // Tikken op de kaart om handmatig een pinpoint te zetten
             map.on('click', function(e) {
                 huidigeLocatie = { lat: e.latlng.lat, lng: e.latlng.lng };
                 if (tijdelijkeMarker) map.removeLayer(tijdelijkeMarker);
@@ -223,6 +226,18 @@
         function toggleMenu() {
             const menu = document.getElementById('menu-dropdown');
             menu.style.display = (menu.style.display === 'block') ? 'none' : 'block';
+        }
+
+        // --- HANDMATIGE FORCEER-FUNCTIE ---
+        function manualForceSync() {
+            if (!navigator.onLine) return alert("Je mobiele data/internet staat uit. Handmatig forceren heeft nu geen zin.");
+            if (!accessToken) return alert("🔒 Je bent niet ingelogd bij Google. Klik eerst op '🔑 Log in'.");
+            
+            forceSyncMode = true;
+            probeerSynchronisatie().then(() => {
+                forceSyncMode = false;
+                toggleMenu();
+            });
         }
 
         // --- GOOGLE DRIVE AUTHENTICATIE ---
@@ -433,7 +448,7 @@
             };
         }
 
-        // --- 5. GOOGLE SYNCHRONISATIE LOOP ---
+        // --- 5. GOOGLE SYNCHRONISATIE LOOP (Hersteld & Verbeterd!) ---
         async function probeerSynchronisatie() {
             if (isSyncing || !navigator.onLine || !db) return;
             
@@ -462,22 +477,28 @@
                     if (conn.type) {
                         isMobiel = (conn.type === 'cellular');
                     } else if (conn.effectiveType) {
-                        isMobiel = ['2g', '3g'].includes(conn.effectiveType); 
+                        isMobiel = ['2g', '3g', '4g'].includes(conn.effectiveType); 
                     }
                 }
 
                 for (const meting of onverzondenMetingen) {
                     try {
                         let fotoLinks = [];
-                        const blokkeerFotosAchterNetwerk = wifiOnlySetting && isMobiel;
+                        
+                        // UPGRADE: Als forceSyncMode op true staat, omzeilen we de wifi-blokkade volledig!
+                        const blokkeerFotosAchterNetwerk = forceSyncMode ? false : (wifiOnlySetting && isMobiel);
 
-                        if (meting.fotos && meting.fotos.length > 0 && !blokkeerFotosAchterNetwerk) {
+                        if (blokkeerFotosAchterNetwerk) {
+                            // CORRECTIE: We breken de sync voor dit punt af (blijft in IndexedDB staan voor later)
+                            console.log(`Meting ${meting.id} geparkeerd in lokale database: wacht op Wifi of Force.`);
+                            continue; 
+                        }
+
+                        if (meting.fotos && meting.fotos.length > 0) {
                             for (const foto of meting.fotos) {
                                 const link = await uploadFotoNaarDrive(foto);
                                 fotoLinks.push(link);
                             }
-                        } else if (meting.fotos && meting.fotos.length > 0 && blokkeerFotosAchterNetwerk) {
-                            fotoLinks.push("[Foto geparkeerd: wacht op Wifi]");
                         }
 
                         await voegToeAanGoogleSheet(meting, fotoLinks.join(', '));
