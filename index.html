@@ -62,7 +62,7 @@
     
     <script>
         window.onerror = function(message, source, lineno, colno, error) {
-            alert("⚠️ Fatale opstartfout gedetecteerd:\n\n" + message + "\n\nRegel: " + lineno + "\nBron: " + source);
+            alert("⚠️ Fatale systeemfout:\n\n" + message + "\n\nRegel: " + lineno + "\nBron: " + source);
             return false;
         };
 
@@ -83,21 +83,22 @@
         let db = null;
         let isSyncing = false;
 
+        // --- KAART STARTEN ---
         try {
             map = L.map('map').setView([50.8503, 4.3517], 13);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '© OpenStreetMap'
             }).addTo(map);
-            console.log("Kaart succesvol geladen.");
+            console.log("Kaart geladen.");
         } catch(err) {
-            alert("Fout bij laden van de kaart: " + err.message);
+            console.error("Fout kaart: " + err.message);
         }
 
         if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js'); }
 
+        // --- GOOGLE SDK EN INLOG LOGICA ---
         function initGoogleDriveApp() {
             try {
-                console.log("Google SDK geladen. Initialiseren van client...");
                 tokenClient = google.accounts.oauth2.initTokenClient({
                     client_id: CLIENT_ID,
                     scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/spreadsheets',
@@ -111,7 +112,7 @@
                 });
                 if(accessToken) { updateAuthButton(true); }
             } catch (err) {
-                alert("Fout tijdens Google Initialisatie: " + err.message);
+                console.error("Fout Google Client init: " + err.message);
             }
         }
 
@@ -127,11 +128,11 @@
         }
 
         function startGoogleAuth() {
-            if (!tokenClient) return alert("Google koppeling is nog aan het laden of geblokkeerd. Wacht een moment of controleer je ad-blocker.");
+            if (!tokenClient) return alert("Google koppeling laadt nog. Wacht een moment.");
             tokenClient.requestAccessToken({prompt: 'consent'});
         }
 
-        // --- 1. INDEXEDDB SETUP ---
+        // --- 1. INDEXEDDB DATABASE ---
         const dbRequest = indexedDB.open("GeoCollectorDB", 1);
         dbRequest.onupgradeneeded = function(e) {
             let database = e.target.result;
@@ -148,7 +149,7 @@
             alert("Database fout: " + e.target.errorCode);
         };
 
-        // --- 2. NETWERK & WIFI DETECTIE ---
+        // --- 2. NETWERK & WIFI CHECK ---
         let wifiOnlySetting = localStorage.getItem('wifiOnly') === 'true';
         document.getElementById('wifi-only-toggle').checked = wifiOnlySetting;
 
@@ -165,7 +166,7 @@
                 statusDiv.innerText = conn && conn.type ? `Status: Online (${conn.type})` : "Status: Online";
                 probeerSynchronisatie();
             } else {
-                statusDiv.innerText = "Status: Offline (Wachtrij actief)";
+                statusDiv.innerText = "Status: Offline";
             }
         }
         window.addEventListener('online', controleerNetwerkStatus);
@@ -173,9 +174,9 @@
         if(navigator.connection) { navigator.connection.addEventListener('change', controleerNetwerkStatus); }
         controleerNetwerkStatus();
 
-        // --- 3. GPS & CAMERAPREVIEW ---
+        // --- 3. GPS CHIP & AFBEELDING Kiezer ---
         function registreerLocatie() {
-            if (!navigator.geolocation) return alert("Geen GPS ondersteuning op dit apparaat.");
+            if (!navigator.geolocation) return alert("Geen GPS op dit apparaat.");
             navigator.geolocation.getCurrentPosition(position => {
                 huidigeLocatie = { lat: position.coords.latitude, lng: position.coords.longitude };
                 if(map) {
@@ -184,7 +185,7 @@
                     tijdelijkeMarker = L.marker([huidigeLocatie.lat, huidigeLocatie.lng]).addTo(map);
                 }
                 document.getElementById('form-container').style.display = 'block';
-            }, (err) => alert("GPS fout: " + err.message + ". Controleer of locatietoegang aan staat."), { enableHighAccuracy: true });
+            }, (err) => alert("GPS fout: " + err.message), { enableHighAccuracy: true });
         }
 
         document.getElementById('photo-input').addEventListener('change', function(e) {
@@ -207,17 +208,16 @@
             huidigeLocatie = null;
         }
 
-        // --- 4. VERWERK & LOKAAL METING OPSLAAN ---
+        // --- 4. DATA COMPRIMEREN EN CODEREN NAAR DB ---
         function verwerkOpslag() {
             const commentaar = document.getElementById('comment').value;
             const fotoInput = document.getElementById('photo-input');
             const files = Array.from(fotoInput.files);
 
-            if (!huidigeLocatie) return alert("Geen locatie bekend. Start eerst de meting.");
+            if (!huidigeLocatie) return alert("Geen GPS fix.");
 
             const geformatteerdCommentaar = commentaar.replace(/\n/g, '<br>');
             
-            // Converteer foto's naar base64 objecten voor betrouwbare opslag in IndexedDB
             const fotoPromises = files.map(file => {
                 return new Promise((resolve) => {
                     const reader = new FileReader();
@@ -276,65 +276,95 @@
             };
         }
 
-        // --- 5. BACKGROUND GOOGLE SYNCHRONISATIE LOOP ---
+        // --- 5. GOOGLE CLOUD APIS SYNCHRONISATIE (ANTI-DUPLICATIE) ---
         async function probeerSynchronisatie() {
             if (isSyncing || !navigator.onLine || !accessToken || !db) return;
             
-            // Controleer netwerkkwaliteit/type indien browser dat ondersteunt
-            const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-            const isMobiel = conn && (conn.type === 'cellular' || ['2g', '3g', '4g'].includes(conn.effectiveType));
+            isSyncing = true;
+            document.getElementById('status-msg').style.display = 'block';
 
-            const tx = db.transaction("metingen", "readwrite");
-            const store = tx.objectStore("metingen");
-            
-            store.openCursor().onsuccess = async function(e) {
-                const cursor = e.target.result;
-                if (!cursor) {
+            try {
+                const onverzondenMetingen = await haalOnverzondenMetingenOp();
+                
+                if (onverzondenMetingen.length === 0) {
                     document.getElementById('status-msg').style.display = 'none';
                     isSyncing = false;
                     return;
                 }
 
-                const meting = cursor.value;
-                if (meting.enviado) {
-                    cursor.continue();
-                    return;
-                }
+                const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+                const isMobiel = conn && (conn.type === 'cellular' || ['2g', '3g', '4g'].includes(conn.effectiveType));
 
-                isSyncing = true;
-                document.getElementById('status-msg').style.display = 'block';
+                for (const meting of onverzondenMetingen) {
+                    try {
+                        let fotoLinks = [];
+                        const blokkeerFotosAchterNetwerk = wifiOnlySetting && isMobiel;
 
-                try {
-                    let fotoLinks = [];
-                    
-                    // Sla foto-upload over als de gebruiker Wifi-only eist en we mobiel zijn
-                    const blokkeerFotosAchterNetwerk = wifiOnlySetting && isMobiel;
-
-                    if (meting.fotos && meting.fotos.length > 0 && !blokkeerFotosAchterNetwerk) {
-                        for (const foto of meting.fotos) {
-                            const link = await uploadFotoNaarDrive(foto);
-                            fotoLinks.push(link);
+                        if (meting.fotos && meting.fotos.length > 0 && !blokkeerFotosAchterNetwerk) {
+                            for (const foto of meting.fotos) {
+                                const link = await uploadFotoNaarDrive(foto);
+                                fotoLinks.push(link);
+                            }
+                        } else if (meting.fotos && meting.fotos.length > 0 && blokkeerFotosAchterNetwerk) {
+                            fotoLinks.push("[Foto geparkeerd: wacht op Wifi]");
                         }
-                    } else if (meting.fotos && meting.fotos.length > 0 && blokkeerFotosAchterNetwerk) {
-                        fotoLinks.push("[Foto geparkeerd: wacht op Wifi]");
+
+                        await voegToeAanGoogleSheet(meting, fotoLinks.join(', '));
+                        await markeerAlsVerzonden(meting.id);
+                        console.log(`Meting ${meting.id} synchroon.`);
+                    } catch (err) {
+                        console.error(`Fout synchronisatie meting ${meting.id}: `, err);
+                        if (!navigator.onLine) break;
                     }
-
-                    // Voeg data toe aan Google Sheets
-                    await voegToeAanGoogleSheet(meting, fotoLinks.join(', '));
-
-                    // Update status in de lokale database
-                    meting.enviado = true;
-                    cursor.update(meting);
-                    console.log(`Meting ${meting.id} succesvol gesynchroniseerd.`);
-                    
-                    // Ga direct door naar de volgende meting in de wachtrij
-                    cursor.continue();
-                } catch (err) {
-                    console.error("Synchronisatie mislukt voor meting: ", err);
-                    isSyncing = false;
-                    document.getElementById('status-msg').style.display = 'none';
                 }
-            };
+            } catch (globalErr) {
+                console.error("Globale sync-fout:", globalErr);
+            } finally {
+                isSyncing = false;
+                document.getElementById('status-msg').style.display = 'none';
+            }
+        }
+
+        function haalOnverzondenMetingenOp() {
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction("metingen", "readonly");
+                const store = tx.objectStore("metingen");
+                const resultaten = [];
+                
+                store.openCursor().onsuccess = function(e) {
+                    const cursor = e.target.result;
+                    if (cursor) {
+                        if (!cursor.value.enviado) {
+                            resultaten.push(cursor.value);
+                        }
+                        cursor.continue();
+                    } else {
+                        resolve(resultaten);
+                    }
+                };
+                tx.onerror = () => reject(tx.error);
+            });
+        }
+
+        function markeerAlsVerzonden(id) {
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction("metingen", "readwrite");
+                const store = tx.objectStore("metingen");
+                const getRequest = store.get(id);
+                
+                getRequest.onsuccess = function() {
+                    const meting = getRequest.result;
+                    if (meting) {
+                        meting.enviado = true;
+                        const updateRequest = store.put(meting);
+                        updateRequest.onsuccess = () => resolve();
+                        updateRequest.onerror = () => reject(updateRequest.error);
+                    } else {
+                        resolve();
+                    }
+                };
+                tx.onerror = () => reject(tx.error);
+            });
         }
 
         async function uploadFotoNaarDrive(fotoData) {
