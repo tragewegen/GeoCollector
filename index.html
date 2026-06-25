@@ -82,10 +82,16 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     
     <script>
+        // Vang standaardfouten op
         window.onerror = function(message, source, lineno, colno, error) {
             alert("⚠️ Systeemfout opgevangen:\n\n" + message + "\n\nRegel: " + lineno + "\nBron: " + source);
             return false;
         };
+
+        // Vang onzichtbare Asynchrone/Promise fouten op (cruciaal voor smartphones!)
+        window.addEventListener('unhandledrejection', function(event) {
+            alert("⚠️ Onverwachte achtergrondfout:\n\n" + event.reason);
+        });
 
         // ================================================================
         // ⚙️ JOUW GOOGLE CONFIGURATIE 
@@ -104,7 +110,7 @@
         let db = null;
         let isSyncing = false;
 
-        // --- HULPFUNCTIE: LOKALE TIJD FORMATTEREN ---
+        // --- LOKALE TIJD FORMATTEREN ---
         function formatteerDatumLokaal(date) {
             const yyyy = date.getFullYear();
             const mm = String(date.getMonth() + 1).padStart(2, '0');
@@ -187,10 +193,8 @@
             alert("Databasefout: " + e.target.errorCode);
         };
 
-        // --- DATABASE RESET FUNCTIE ---
         function resetLokaleDatabase() {
             if (!confirm("⚠️ WEET JE DIT ZEKER?\n\nHiermee wis je alle lokale punten, geparkeerde foto's en markers op de kaart definitief.\n\nDit lost vastgelopen synchronisaties op van oude testgegevens.")) return;
-            
             if (!db) return alert("Database is niet correct geïnitialiseerd.");
 
             const tx = db.transaction("metingen", "readwrite");
@@ -199,14 +203,14 @@
 
             clearRequest.onsuccess = function() {
                 alert("✅ Lokale database succesvol leeggemaakt! De PWA herstart nu.");
-                window.location.reload(); // Herstart app om kaart en cache te flushen
+                window.location.reload();
             };
             clearRequest.onerror = function() {
                 alert("Fout tijdens database reset: " + clearRequest.error);
             };
         }
 
-        // --- 2. VERBINDINGSMANAGEMENT & WIFI-BEPERKING ---
+        // --- 2. VERBINDINGSMANAGEMENT ---
         let wifiOnlySetting = localStorage.getItem('wifiOnly') === 'true';
         document.getElementById('wifi-only-toggle').checked = wifiOnlySetting;
 
@@ -271,7 +275,7 @@
             const fotoInput = document.getElementById('photo-input');
             const files = Array.from(fotoInput.files);
 
-            if (!huidigeLocatie) return alert("Geen actieve GPS coördinaten gevonden.");
+            if (!huidigeLocatie) return alert("Geen active GPS coördinaten gevonden.");
 
             const geformatteerdCommentaar = commentaar.replace(/\n/g, '<br>');
             
@@ -290,7 +294,7 @@
                     commentaar: geformatteerdCommentaar,
                     originalCommentaar: commentaar,
                     fotos: geconverteerdeFotos,
-                    timestamp: formatteerDatumLokaal(new Date()), // Opgelost: Lokale tijd i.p.v. UTC
+                    timestamp: formatteerDatumLokaal(new Date()),
                     enviado: false
                 };
 
@@ -335,9 +339,17 @@
 
         // --- 5. GOOGLE SYNCHRONISATIE LOOP ---
         async function probeerSynchronisatie() {
-            if (isSyncing || !navigator.onLine || !accessToken || !db) return;
+            if (isSyncing || !navigator.onLine || !db) return;
+            
+            // Opgelost: Geef visuele feedback als er gewacht wordt op inloggen
+            if (!accessToken) {
+                document.getElementById('status-msg').innerText = "⚠️ Wachtrij geparkeerd: Log eerst in via de 🔑 knop bovenin.";
+                document.getElementById('status-msg').style.display = 'block';
+                return;
+            }
             
             isSyncing = true;
+            document.getElementById('status-msg').innerText = "Wachtrij aan het synchroniseren met Google Cloud...";
             document.getElementById('status-msg').style.display = 'block';
 
             try {
@@ -350,8 +362,6 @@
                 }
 
                 const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-                
-                // Opgelost: Verbeterde wifi-detectie om '4g' valse-positieven te voorkomen
                 let isMobiel = false;
                 if (conn) {
                     if (conn.type) {
@@ -383,14 +393,20 @@
                         console.log(`Meting ${meting.id} succesvol verzonden.`);
                     } catch (err) {
                         console.error(`Fout bij verwerken van meting ${meting.id}: `, err);
+                        // Opgelost: Geef direct een pop-up waarschuwing op het scherm bij sync-fouten
+                        alert(`⚠️ Synchronisatiefout bij Punt #${meting.id}:\n\n${err.message}`);
                         if (!navigator.onLine) break;
                     }
                 }
             } catch (globalErr) {
                 console.error("Globale synchronisatiefout:", globalErr);
+                alert("⚠️ Globale synchronisatiefout:\n\n" + globalErr.message);
             } finally {
                 isSyncing = false;
-                document.getElementById('status-msg').style.display = 'none';
+                // Alleen verbergen als er geen waarschuwing staat
+                if (!document.getElementById('status-msg').innerText.includes("⚠️")) {
+                    document.getElementById('status-msg').style.display = 'none';
+                }
             }
         }
 
@@ -462,7 +478,12 @@
             });
 
             if (!res.ok) {
-                if(res.status === 401) { updateAuthButton(false); localStorage.removeItem('google_access_token'); }
+                if(res.status === 401) { 
+                    updateAuthButton(false); 
+                    localStorage.removeItem('google_access_token');
+                    accessToken = null;
+                    alert("🔒 Google sessie is verlopen. Klik bovenin opnieuw op '🔑 Log in'.");
+                }
                 throw new Error("Drive API Fout: " + res.status);
             }
             const driveResult = await res.json();
@@ -489,7 +510,12 @@
             });
 
             if (!res.ok) {
-                if(res.status === 401) { updateAuthButton(false); localStorage.removeItem('google_access_token'); }
+                if(res.status === 401) { 
+                    updateAuthButton(false); 
+                    localStorage.removeItem('google_access_token');
+                    accessToken = null;
+                    alert("🔒 Google sessie is verlopen. Klik bovenin opnieuw op '🔑 Log in'.");
+                }
                 throw new Error("Sheets API Fout: " + res.status);
             }
             return;
