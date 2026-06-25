@@ -13,15 +13,24 @@
         body { margin: 0; padding: 0; font-family: Arial, sans-serif; display: flex; flex-direction: column; height: 100vh; background: #f4f6f7; }
         #map { flex: 1; width: 100%; min-height: 300px; }
         
-        /* Settings bar bovenin */
+        /* Navigatie/Statusbalk bovenin */
         #settings-bar { background: #2c3e50; color: white; padding: 10px; display: flex; justify-content: space-between; align-items: center; font-size: 14px; z-index: 1000; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
-        .toggle-container { display: flex; align-items: center; gap: 8px; }
+        .bar-buttons { display: flex; gap: 8px; align-items: center; }
+        
+        /* Het nieuwe uitschuifbare menu */
+        #menu-dropdown { background: #34495e; color: white; padding: 15px; display: none; z-index: 1000; box-shadow: 0 4px 5px rgba(0,0,0,0.2); border-top: 1px solid #4f6f8f; }
+        .menu-item { margin-bottom: 12px; display: flex; align-items: center; gap: 10px; font-size: 15px; }
+        .menu-item:last-child { margin-bottom: 0; }
 
         /* Invoerscherm */
         #form-container { background: #fff; padding: 15px; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); display: none; z-index: 1000; max-height: 50vh; overflow-y: auto; }
+        
+        /* Knoppen styling */
         .btn { color: white; border: none; padding: 12px; font-size: 16px; border-radius: 5px; cursor: pointer; width: 100%; margin-top: 10px; font-weight: bold; }
         .btn-main { background: #2ecc71; }
         .btn-cancel { background: #e74c3c; }
+        .btn-danger { background: #c0392b; padding: 8px 12px; font-size: 14px; width: auto; margin-top: 0; }
+        .btn-menu-toggle { background: #7f8c8d; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; }
         
         /* Grote meetknop rechtsonder */
         #geo-btn { position: absolute; bottom: 30px; right: 20px; z-index: 1000; background: #2ecc71; color: white; border: none; border-radius: 50%; width: 60px; height: 60px; font-size: 24px; cursor: pointer; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
@@ -33,14 +42,26 @@
 <body>
 
     <div id="settings-bar">
-        <div class="toggle-container">
-            <input type="checkbox" id="wifi-only-toggle" onchange="toggleWifiSetting(this.checked)">
-            <label for="wifi-only-toggle">Foto's alleen via Wifi</label>
-        </div>
-        <button id="auth-btn" onclick="startGoogleAuth()">🔑 Log in met Google</button>
         <div id="network-status">Status: Controleren...</div>
+        <div class="bar-buttons">
+            <button id="auth-btn" onclick="startGoogleAuth()" style="background:#4285F4; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">🔑 Log in</button>
+            <button class="btn btn-menu-toggle" onclick="toggleMenu()">⚙️ Menu</button>
+        </div>
     </div>
-    <div id="status-msg">Wachtrij aan het synchroniseren met Google Drive...</div>
+
+    <div id="menu-dropdown">
+        <div class="menu-item">
+            <input type="checkbox" id="wifi-only-toggle" onchange="toggleWifiSetting(this.checked)">
+            <label for="wifi-only-toggle"><b>Foto's alleen verzenden via Wifi</b> (bespaar mobiele data)</label>
+        </div>
+        <hr style="border: 0; border-top: 1px solid #4f6f8f; margin: 12px 0;">
+        <div class="menu-item" style="justify-content: space-between;">
+            <span><b>Lokale database opschonen:</b><br><small style="color: #bdc3c7;">Wist alle oude markers en herstart de app met een schone lei.</small></span>
+            <button class="btn btn-danger" onclick="resetLokaleDatabase()">🗑️ Reset Database</button>
+        </div>
+    </div>
+
+    <div id="status-msg">Wachtrij aan het synchroniseren met Google Cloud...</div>
 
     <button id="geo-btn" onclick="registreerLocatie()">📍</button>
     <div id="map"></div>
@@ -96,6 +117,12 @@
 
         if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js'); }
 
+        // --- INTERFACE UTILS ---
+        function toggleMenu() {
+            const menu = document.getElementById('menu-dropdown');
+            menu.style.display = (menu.style.display === 'block') ? 'none' : 'block';
+        }
+
         // --- GOOGLE DRIVE AUTHENTICATIE ---
         function initGoogleDriveApp() {
             try {
@@ -119,10 +146,10 @@
         function updateAuthButton(isLoggedIn) {
             const btn = document.getElementById('auth-btn');
             if(isLoggedIn) {
-                btn.innerText = "✅ Google Ingelogd";
+                btn.innerText = "✅ Ingelogd";
                 btn.style.background = "#2ecc71";
             } else {
-                btn.innerText = "🔑 Log in met Google";
+                btn.innerText = "🔑 Log in";
                 btn.style.background = "#4285F4";
             }
         }
@@ -148,6 +175,25 @@
         dbRequest.onerror = function(e) {
             alert("Databasefout: " + e.target.errorCode);
         };
+
+        // --- DATABASE RESET FUNCTIE ---
+        function resetLokaleDatabase() {
+            if (!confirm("⚠️ WEET JE DIT ZEKER?\n\nHiermee wis je alle lokale punten, geparkeerde foto's en markers op de kaart definitief.\n\nDit lost vastgelopen synchronisaties op van oude testgegevens.")) return;
+            
+            if (!db) return alert("Database is niet correct geïnitialiseerd.");
+
+            const tx = db.transaction("metingen", "readwrite");
+            const store = tx.objectStore("metingen");
+            const clearRequest = store.clear();
+
+            clearRequest.onsuccess = function() {
+                alert("✅ Lokale database succesvol leeggemaakt! De PWA herstart nu.");
+                window.location.reload(); // Herstart app om kaart en cache te flushen
+            };
+            clearRequest.onerror = function() {
+                alert("Fout tijdens database reset: " + clearRequest.error);
+            };
+        }
 
         // --- 2. VERBINDINGSMANAGEMENT & WIFI-BEPERKING ---
         let wifiOnlySetting = localStorage.getItem('wifiOnly') === 'true';
@@ -208,7 +254,7 @@
             huidigeLocatie = null;
         }
 
-        // --- 4. LOCALE BLOB-OPSLAG (INDEXEDDB) ---
+        // --- 4. LOCALE METING-OPSLAG ---
         function verwerkOpslag() {
             const commentaar = document.getElementById('comment').value;
             const fotoInput = document.getElementById('photo-input');
@@ -309,12 +355,12 @@
                             fotoLinks.push("[Foto geparkeerd: wacht op Wifi]");
                         }
 
-                        // Schrijf data weg naar Google Sheets
+                        // Schrijf data weg naar Google Sheets + Debugging timestamp
                         await voegToeAanGoogleSheet(meting, fotoLinks.join(', '));
                         
-                        // Update de lokale database-vlag direct ná succes
+                        // Update status vlag in database
                         await markeerAlsVerzonden(meting.id);
-                        console.log(`Meting ${meting.id} succesvol verwerkt.`);
+                        console.log(`Meting ${meting.id} succesvol verzonden.`);
                     } catch (err) {
                         console.error(`Fout bij verwerken van meting ${meting.id}: `, err);
                         if (!navigator.onLine) break;
@@ -404,7 +450,7 @@
         }
 
         async function voegToeAanGoogleSheet(meting, gecombineerdeLinks) {
-            // Gegarandeerde timestamp debugging-kolom via fallback
+            // Live gegarandeerde debugging timestamp kolom ingebouwd
             const rows = [
                 meting.id,
                 meting.lat,
@@ -427,7 +473,7 @@
                 if(res.status === 401) { updateAuthButton(false); localStorage.removeItem('google_access_token'); }
                 throw new Error("Sheets API Fout: " + res.status);
             }
-            return; // Succesvol weggeschreven, we gaan direct door!
+            return;
         }
     </script>
 
