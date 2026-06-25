@@ -104,6 +104,17 @@
         let db = null;
         let isSyncing = false;
 
+        // --- HULPFUNCTIE: LOKALE TIJD FORMATTEREN ---
+        function formatteerDatumLokaal(date) {
+            const yyyy = date.getFullYear();
+            const mm = String(date.getMonth() + 1).padStart(2, '0');
+            const dd = String(date.getDate()).padStart(2, '0');
+            const hh = String(date.getHours()).padStart(2, '0');
+            const min = String(date.getMinutes()).padStart(2, '0');
+            const ss = String(date.getSeconds()).padStart(2, '0');
+            return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+        }
+
         // --- KAART INITIALISEREN ---
         try {
             map = L.map('map').setView([50.8503, 4.3517], 13);
@@ -279,7 +290,7 @@
                     commentaar: geformatteerdCommentaar,
                     originalCommentaar: commentaar,
                     fotos: geconverteerdeFotos,
-                    timestamp: new Date().toISOString(),
+                    timestamp: formatteerDatumLokaal(new Date()), // Opgelost: Lokale tijd i.p.v. UTC
                     enviado: false
                 };
 
@@ -298,7 +309,7 @@
 
         function voegMarkerToeAanKaart(meting) {
             if (!map) return;
-            let popupContent = `<b>Meting #${meting.id}</b><br>${meting.commentaar}<br><small>${new Date(meting.timestamp || Date.now()).toLocaleString()}</small>`;
+            let popupContent = `<b>Meting #${meting.id}</b><br>${meting.commentaar}<br><small>${meting.timestamp}</small>`;
             if (meting.fotos && meting.fotos.length > 0) {
                 popupContent += '<br><div style="display:flex; gap:4px; margin-top:5px;">';
                 meting.fotos.forEach(f => {
@@ -339,7 +350,16 @@
                 }
 
                 const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-                const isMobiel = conn && (conn.type === 'cellular' || ['2g', '3g', '4g'].includes(conn.effectiveType));
+                
+                // Opgelost: Verbeterde wifi-detectie om '4g' valse-positieven te voorkomen
+                let isMobiel = false;
+                if (conn) {
+                    if (conn.type) {
+                        isMobiel = (conn.type === 'cellular');
+                    } else if (conn.effectiveType) {
+                        isMobiel = ['2g', '3g'].includes(conn.effectiveType); 
+                    }
+                }
 
                 for (const meting of onverzondenMetingen) {
                     try {
@@ -355,7 +375,7 @@
                             fotoLinks.push("[Foto geparkeerd: wacht op Wifi]");
                         }
 
-                        // Schrijf data weg naar Google Sheets + Debugging timestamp
+                        // Schrijf data weg naar Google Sheets
                         await voegToeAanGoogleSheet(meting, fotoLinks.join(', '));
                         
                         // Update status vlag in database
@@ -450,13 +470,12 @@
         }
 
         async function voegToeAanGoogleSheet(meting, gecombineerdeLinks) {
-            // Live gegarandeerde debugging timestamp kolom ingebouwd
             const rows = [
                 meting.id,
                 meting.lat,
                 meting.lng,
                 meting.originalCommentaar,
-                meting.timestamp || new Date().toISOString(), 
+                meting.timestamp, 
                 gecombineerdeLinks
             ];
 
