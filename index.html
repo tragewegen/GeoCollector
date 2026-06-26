@@ -93,7 +93,7 @@
     <div id="map"></div>
 
     <div id="form-container">
-        <h3>Nieuw punt registreren</h3>
+        <h3>Nieuw punt registrar</h3>
         <label for="comment">Commentaar:</label>
         <textarea id="comment" rows="3" placeholder="Typ hier je opmerkingen..."></textarea>
         
@@ -138,7 +138,8 @@
         let nauwkeurigheidCirkel = null;
         let db = null;
         let isSyncing = false;
-        let forceSyncMode = false; // Controle-vlag voor handmatig forceren
+        let forceSyncMode = false; 
+        let gpsWatchId = null; // NIEUW: Houdt de actieve live tracking-sessie bij
 
         // --- LOKALE TIJD FORMATTEREN ---
         function formatteerDatumLokaal(date) {
@@ -159,7 +160,8 @@
         try {
             map = L.map('map').setView([lastLat, lastLng], lastZoom);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '© OpenStreetMap'
+                attribution: '© OpenStreetMap',
+                maxZoom: 19
             }).addTo(map);
             
             map.on('click', function(e) {
@@ -167,6 +169,11 @@
                 if (tijdelijkeMarker) map.removeLayer(tijdelijkeMarker);
                 tijdelijkeMarker = L.marker([huidigeLocatie.lat, huidigeLocatie.lng]).addTo(map);
                 document.getElementById('form-container').style.display = 'block';
+            });
+
+            // Onthoud zoomniveau wanneer de gebruiker handmatig in/uitzoomt
+            map.on('zoomend', function() {
+                localStorage.setItem('last_zoom', map.getZoom());
             });
 
             autoLocatieOpstarten();
@@ -200,24 +207,37 @@
             gpsMarker = L.marker([lat, lng], { icon: gpsIcon }).addTo(map);
         }
 
+        // UPGRADE 1 & 2: Continu tracken en kaart automatisch centreren
         function autoLocatieOpstarten() {
             if (!navigator.geolocation) return;
-            navigator.geolocation.getCurrentPosition(position => {
+            
+            // We gebruiken watchPosition in plaats van getCurrentPosition
+            gpsWatchId = navigator.geolocation.watchPosition(position => {
                 const lat = position.coords.latitude;
                 const lng = position.coords.longitude;
                 const accuracy = position.coords.accuracy;
                 
                 localStorage.setItem('last_lat', lat);
                 localStorage.setItem('last_lng', lng);
-                localStorage.setItem('last_zoom', 17);
                 
                 if (map) {
-                    map.setView([lat, lng], 17);
                     updateGpsIndicator(lat, lng, accuracy);
+                    
+                    // UX-BEVEILIGING: Verschuif de kaart alleen als de gebruiker NU NIET 
+                    // een formulier aan het invullen is. Dit voorkomt irritante sprongen tijdens typen.
+                    const isFormulierOpen = document.getElementById('form-container').style.display === 'block';
+                    if (!isFormulierOpen) {
+                        const huidigZoomniveau = map.getZoom() > 13 ? map.getZoom() : 17;
+                        map.setView([lat, lng], huidigZoomniveau);
+                    }
                 }
             }, (err) => {
-                alert("⚠️ Locatievoorzieningen (GPS) staan uit of zijn geblokkeerd. De app toont nu je laatst bekende locatie.");
-            }, { enableHighAccuracy: true, timeout: 8000 });
+                console.warn("GPS live-update vertraagd of mislukt: " + err.message);
+            }, { 
+                enableHighAccuracy: true, // Forceert het gebruik van de echte GPS-chip (nauwkeurig)
+                timeout: 10000, 
+                maximumAge: 0 // Voorkomt gecachte (oude) locaties
+            });
         }
 
         if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js'); }
@@ -347,7 +367,6 @@
                 
                 localStorage.setItem('last_lat', lat);
                 localStorage.setItem('last_lng', lng);
-                localStorage.setItem('last_zoom', 17);
 
                 if(map) {
                     map.setView([lat, lng], 17);
@@ -448,7 +467,7 @@
             };
         }
 
-        // --- 5. GOOGLE SYNCHRONISATIE LOOP (Hersteld & Verbeterd!) ---
+        // --- 5. GOOGLE SYNCHRONISATIE LOOP ---
         async function probeerSynchronisatie() {
             if (isSyncing || !navigator.onLine || !db) return;
             
@@ -485,11 +504,9 @@
                     try {
                         let fotoLinks = [];
                         
-                        // UPGRADE: Als forceSyncMode op true staat, omzeilen we de wifi-blokkade volledig!
                         const blokkeerFotosAchterNetwerk = forceSyncMode ? false : (wifiOnlySetting && isMobiel);
 
                         if (blokkeerFotosAchterNetwerk) {
-                            // CORRECTIE: We breken de sync voor dit punt af (blijft in IndexedDB staan voor later)
                             console.log(`Meting ${meting.id} geparkeerd in lokale database: wacht op Wifi of Force.`);
                             continue; 
                         }
