@@ -55,6 +55,10 @@
         
         /* Grote meetknop rechtsonder */
         #geo-btn { position: absolute; bottom: 30px; right: 20px; z-index: 1000; background: #2ecc71; color: white; border: none; border-radius: 50%; width: 60px; height: 60px; font-size: 24px; cursor: pointer; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
+        
+        /* NIEUW: Locatie Volgen Aan/Uit capsule-knop boven de meetknop */
+        #follow-btn { position: absolute; bottom: 105px; right: 20px; z-index: 1000; background: #2ecc71; color: white; border: none; border-radius: 20px; padding: 0 15px; height: 38px; font-size: 13px; font-weight: bold; cursor: pointer; box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: flex; align-items: center; gap: 5px; transition: background 0.3s; }
+        
         textarea { width: 100%; box-sizing: border-box; margin-top: 5px; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 16px; }
         .preview-img { max-width: 70px; height: 70px; object-fit: cover; margin: 5px; border-radius: 4px; border: 1px solid #ddd; }
         #status-msg { background: #f1c40f; color: #2c3e50; text-align: center; padding: 5px; font-size: 12px; font-weight: bold; display: none; }
@@ -89,11 +93,13 @@
 
     <div id="status-msg">Wachtrij aan het synchroniseren met Google Cloud...</div>
 
+    <button id="follow-btn" onclick="toggleVolgLocatie()">🔄 Volg: AAN</button>
     <button id="geo-btn" onclick="registreerLocatie()">📍</button>
+    
     <div id="map"></div>
 
     <div id="form-container">
-        <h3>Nieuw punt registrar</h3>
+        <h3>Nieuw punt registreren</h3>
         <label for="comment">Commentaar:</label>
         <textarea id="comment" rows="3" placeholder="Typ hier je opmerkingen..."></textarea>
         
@@ -139,7 +145,8 @@
         let db = null;
         let isSyncing = false;
         let forceSyncMode = false; 
-        let gpsWatchId = null; // NIEUW: Houdt de actieve live tracking-sessie bij
+        let gpsWatchId = null;
+        let isFollowingLocation = true; // NIEUW: Houdt bij of de kaart mee moet schuiven
 
         // --- LOKALE TIJD FORMATTEREN ---
         function formatteerDatumLokaal(date) {
@@ -171,7 +178,6 @@
                 document.getElementById('form-container').style.display = 'block';
             });
 
-            // Onthoud zoomniveau wanneer de gebruiker handmatig in/uitzoomt
             map.on('zoomend', function() {
                 localStorage.setItem('last_zoom', map.getZoom());
             });
@@ -207,11 +213,9 @@
             gpsMarker = L.marker([lat, lng], { icon: gpsIcon }).addTo(map);
         }
 
-        // UPGRADE 1 & 2: Continu tracken en kaart automatisch centreren
         function autoLocatieOpstarten() {
             if (!navigator.geolocation) return;
             
-            // We gebruiken watchPosition in plaats van getCurrentPosition
             gpsWatchId = navigator.geolocation.watchPosition(position => {
                 const lat = position.coords.latitude;
                 const lng = position.coords.longitude;
@@ -221,23 +225,44 @@
                 localStorage.setItem('last_lng', lng);
                 
                 if (map) {
+                    // Update de positie van de blauwe crosshair áltijd op de achtergrond
                     updateGpsIndicator(lat, lng, accuracy);
                     
-                    // UX-BEVEILIGING: Verschuif de kaart alleen als de gebruiker NU NIET 
-                    // een formulier aan het invullen is. Dit voorkomt irritante sprongen tijdens typen.
+                    // PAS AAN: Verschuif de kaart ALLEEN als 'Volgmodus' aan staat én het formulier dicht is
                     const isFormulierOpen = document.getElementById('form-container').style.display === 'block';
-                    if (!isFormulierOpen) {
+                    if (isFollowingLocation && !isFormulierOpen) {
                         const huidigZoomniveau = map.getZoom() > 13 ? map.getZoom() : 17;
                         map.setView([lat, lng], huidigZoomniveau);
                     }
                 }
             }, (err) => {
-                console.warn("GPS live-update vertraagd of mislukt: " + err.message);
+                console.warn("GPS live-update vertraagd: " + err.message);
             }, { 
-                enableHighAccuracy: true, // Forceert het gebruik van de echte GPS-chip (nauwkeurig)
+                enableHighAccuracy: true, 
                 timeout: 10000, 
-                maximumAge: 0 // Voorkomt gecachte (oude) locaties
+                maximumAge: 0 
             });
+        }
+
+        // NIEUW: Functie om de volgmodus om te schakelen
+        function toggleVolgLocatie() {
+            isFollowingLocation = !isFollowingLocation;
+            const btn = document.getElementById('follow-btn');
+            
+            if (isFollowingLocation) {
+                btn.innerText = "🔄 Volg: AAN";
+                btn.style.background = "#2ecc71"; // Groen
+                
+                // Direct terugspringen naar huidige locatie bij inschakelen
+                const lastLat = parseFloat(localStorage.getItem('last_lat'));
+                const lastLng = parseFloat(localStorage.getItem('last_lng'));
+                if (map && lastLat && lastLng) {
+                    map.setView([lastLat, lastLng], map.getZoom() > 13 ? map.getZoom() : 17);
+                }
+            } else {
+                btn.innerText = "🛑 Volg: UIT";
+                btn.style.background = "#e74c3c"; // Rood
+            }
         }
 
         if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js'); }
